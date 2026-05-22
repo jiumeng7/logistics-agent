@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物流运输方案比价智能体</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f8f9fa; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        input, button { padding: 10px; margin: 8px 5px; font-size: 16px; }
+        button { background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .card { background: white; padding: 20px; margin: 20px 0; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: center; }
+        th { background: #f1f3f5; }
+        .recommend { background: #d4edda !important; font-weight: bold; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚢 物流运输方案比价与优化智能体</h1>
+        
+                <form id="orderForm" class="card">
+            <label>货物重量 (kg): </label>
+            <input type="number" id="weight" step="0.01" min="0.01" required><br>
+            
+            <label>起运港代码: </label>
+            <input type="text" id="origin" placeholder="如: CNSGH" required><br>
+            
+            <label>目的港代码: </label>
+            <input type="text" id="destination" placeholder="如: USLAX" required><br>
+            
+            <label>最大运输天数 (可选): </label>
+            <input type="number" id="max_days" min="1"><br>
+            
+            <button type="submit">开始比价</button>
+        </form>
+
+        <div id="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('orderForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<p>正在计算中...</p>';
+
+            // 前端校验
+            const weight = parseFloat(document.getElementById('weight').value);
+            const origin = document.getElementById('origin').value.trim();
+            const destination = document.getElementById('destination').value.trim();
+
+            if (!weight || weight <= 0) {
+                resultDiv.innerHTML = '<p class="error">❌ 货物重量必须大于0</p>';
+                return;
+            }
+            if (!origin || !destination) {
+                resultDiv.innerHTML = '<p class="error">❌ 起运港和目的港代码不能为空</p>';
+                return;
+            }
+
+            const order = {
+                weight: weight,
+                origin: origin.toUpperCase(),
+                destination: destination.toUpperCase(),
+                max_days: document.getElementById('max_days').value ? 
+                         parseInt(document.getElementById('max_days').value) : null
+            };
+
+            try {
+                const response = await fetch('http://localhost:5000/api/compare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(order)
+                });
+                
+                const data = await response.json();
+                
+                if (response.status === 400 && data.error) {
+                    resultDiv.innerHTML = `<p class="error">❌ ${data.error}</p>`;
+                    return;
+                }
+                
+                renderResult(data);
+            } catch (err) {
+                resultDiv.innerHTML = '<p class="error">❌ 请求失败，请确保后端正在运行</p>';
+            }
+        });
+
+        function renderResult(data) {
+            let html = `<div class="card"><h2>比价结果</h2><p>${data.message}</p>`;
+
+            if (data.recommendation) {
+                const rec = data.recommendation;
+                html += `
+                    <div class="card" style="border: 3px solid #28a745;">
+                        <h3>⭐ 推荐最优方案</h3>
+                        <p><strong>${rec.carrier}</strong> | ${rec.route} | ${rec.weight_tier}</p>
+                        <p>预计时效: ${rec.transit_days} 天 | 总成本: <strong>¥${rec.total_cost}</strong></p>
+                    </div>`;
+            }
+
+            if (data.all_schemes && data.all_schemes.length > 0) {
+                html += `<h3>所有可用方案（按成本排序）</h3><table>`;
+                html += `<tr><th>承运商</th><th>航线</th><th>时效</th><th>重量区间</th><th>基础运费</th><th>附加费</th><th>总成本</th></tr>`;
+                
+                data.all_schemes.forEach((scheme, index) => {
+                    const isRec = index === 0 ? ' class="recommend"' : '';
+                    html += `<tr${isRec}>
+                        <td>${scheme.carrier}</td>
+                        <td>${scheme.route}</td>
+                        <td>${scheme.transit_days}天</td>
+                        <td>${scheme.weight_tier}</td>
+                        <td>¥${scheme.base_cost}</td>
+                        <td>¥${scheme.surcharge}</td>
+                        <td><strong>¥${scheme.total_cost}</strong></td>
+                    </tr>`;
+                });
+                html += `</table>`;
+            }
+                        <!-- 导出按钮 -->
+            if (data.all_schemes && data.all_schemes.length > 0) {
+                html += `
+                    <button onclick="exportReport(${JSON.stringify(data).replace(/"/g, '&quot;')})" 
+                            style="margin-top: 15px; background: #28a745;">
+                        📄 导出比价简报 (.txt)
+                    </button>`;
+            }
+            html += `</div>`;
+            document.getElementById('result').innerHTML = html;
+        }
+                function exportReport(data) {
+            let report = `物流运输方案比价简报\n`;
+            report += `生成时间: ${new Date().toLocaleString('zh-CN')}\n`;
+            report += `货物重量: ${data.all_schemes[0]?.weight_tier || ''} | 起运港: ${data.all_schemes[0]?.route.split(' → ')[0]} | 目的港: ${data.all_schemes[0]?.route.split(' → ')[1]}\n\n`;
+            report += `⭐ 最优推荐方案\n`;
+            const rec = data.recommendation;
+            report += `${rec.carrier} | ${rec.route} | ${rec.weight_tier} | 时效: ${rec.transit_days}天 | 总成本: ¥${rec.total_cost}\n\n`;
+            report += `所有方案对比:\n`;
+            report += `承运商\t航线\t时效\t重量区间\t基础运费\t附加费\t总成本\n`;
+            
+            data.all_schemes.forEach(s => {
+                report += `${s.carrier}\t${s.route}\t${s.transit_days}天\t${s.weight_tier}\t¥${s.base_cost}\t¥${s.surcharge}\t¥${s.total_cost}\n`;
+            });
+            
+            const blob = new Blob([report], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `物流比价简报_${new Date().toISOString().slice(0,10)}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
